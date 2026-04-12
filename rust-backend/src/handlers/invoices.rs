@@ -14,6 +14,7 @@ use crate::{
     auth::{SESSION_COOKIE, current_merchant, generate_memo, generate_public_id},
     error::AppError,
     models::{Invoice, InvoiceRequest, Merchant},
+    stellar::build_checkout_url,
 };
 
 pub async fn list_invoices(
@@ -79,11 +80,7 @@ pub async fn create_invoice(
         )
         .await?;
     let invoice = Invoice::from_row(&row);
-    let checkout_url = format!(
-        "{}/pay/{}",
-        state.config.public_app_url.trim_end_matches('/'),
-        invoice.public_id
-    );
+    let checkout_url = build_checkout_url(&state.config, &invoice.public_id);
     let qr_svg = QrCode::new(checkout_url.as_bytes())
         .map_err(|_| AppError::Internal)?
         .render::<svg::Color>()

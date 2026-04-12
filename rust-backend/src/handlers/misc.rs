@@ -7,12 +7,6 @@ pub async fn health() -> Json<Value> {
     Json(json!({ "ok": true, "service": "astropay-rust-backend" }))
 }
 
-pub async fn not_implemented_cron() -> Result<Json<Value>, AppError> {
-    Err(AppError::not_implemented(
-        "Rust reconciliation and settlement jobs are not implemented yet. The current port covers auth, sessions, invoices, and webhook-driven payment marking.",
-    ))
-}
-
 pub async fn stellar_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,

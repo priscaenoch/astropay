@@ -64,3 +64,53 @@ impl Config {
         Duration::hours(self.invoice_expiry_hours)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    fn sample_config() -> Config {
+        Config {
+            bind_addr: "127.0.0.1:8080".parse().unwrap(),
+            app_url: "http://localhost:3000".to_string(),
+            public_app_url: "http://localhost:3000".to_string(),
+            database_url: "postgres://postgres:postgres@localhost:5432/astropay".to_string(),
+            pgssl: "disable".to_string(),
+            session_secret: "secret".to_string(),
+            horizon_url: "https://horizon-testnet.stellar.org".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            stellar_network: "TESTNET".to_string(),
+            asset_code: "USDC".to_string(),
+            asset_issuer: "ISSUER".to_string(),
+            platform_treasury_public_key: "TREASURY".to_string(),
+            platform_treasury_secret_key: None,
+            platform_fee_bps: 100,
+            invoice_expiry_hours: 24,
+            cron_secret: "cron".to_string(),
+            secure_cookies: false,
+        }
+    }
+
+    #[test]
+    fn invoice_expiry_returns_hours_duration() {
+        let config = sample_config();
+        assert_eq!(config.invoice_expiry().num_hours(), 24);
+    }
+
+    #[test]
+    fn config_preserves_url_network_and_fee_values() {
+        let config = sample_config();
+        assert_eq!(config.app_url, "http://localhost:3000");
+        assert_eq!(config.public_app_url, "http://localhost:3000");
+        assert_eq!(config.stellar_network, "TESTNET");
+        assert_eq!(config.platform_fee_bps, 100);
+    }
+
+    #[test]
+    fn config_keeps_ssl_and_secret_flags() {
+        let config = sample_config();
+        assert_eq!(config.pgssl, "disable");
+        assert!(!config.secure_cookies);
+        assert!(config.platform_treasury_secret_key.is_none());
+    }
+}

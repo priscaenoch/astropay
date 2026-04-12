@@ -4,6 +4,7 @@ mod db;
 mod error;
 mod handlers;
 mod models;
+mod stellar;
 
 use axum::{
     Router,
@@ -57,14 +58,8 @@ async fn main() -> anyhow::Result<()> {
             "/api/invoices/{id}/checkout",
             post(handlers::invoices::unsupported_checkout),
         )
-        .route(
-            "/api/cron/reconcile",
-            get(handlers::misc::not_implemented_cron),
-        )
-        .route(
-            "/api/cron/settle",
-            get(handlers::misc::not_implemented_cron),
-        )
+        .route("/api/cron/reconcile", get(handlers::cron::reconcile))
+        .route("/api/cron/settle", get(handlers::cron::settle))
         .route(
             "/api/webhooks/stellar",
             post(handlers::misc::stellar_webhook),

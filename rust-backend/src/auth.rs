@@ -127,3 +127,58 @@ fn session_cookie(config: &Config, token: String) -> Cookie<'static> {
         .same_site(SameSite::Lax)
         .build()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        generate_memo, generate_public_id, hash_password, session_cookie, verify_password,
+    };
+    use crate::config::Config;
+
+    fn sample_config() -> Config {
+        Config {
+            bind_addr: "127.0.0.1:8080".parse().unwrap(),
+            app_url: "http://localhost:3000".to_string(),
+            public_app_url: "http://localhost:3000".to_string(),
+            database_url: "postgres://postgres:postgres@localhost:5432/astropay".to_string(),
+            pgssl: "disable".to_string(),
+            session_secret: "secret".to_string(),
+            horizon_url: "https://horizon-testnet.stellar.org".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            stellar_network: "TESTNET".to_string(),
+            asset_code: "USDC".to_string(),
+            asset_issuer: "ISSUER".to_string(),
+            platform_treasury_public_key: "TREASURY".to_string(),
+            platform_treasury_secret_key: None,
+            platform_fee_bps: 100,
+            invoice_expiry_hours: 24,
+            cron_secret: "cron".to_string(),
+            secure_cookies: false,
+        }
+    }
+
+    #[test]
+    fn hash_and_verify_round_trip() {
+        let hashed = hash_password("correct horse battery staple").unwrap();
+        assert!(verify_password("correct horse battery staple", &hashed));
+        assert!(!verify_password("wrong-password", &hashed));
+    }
+
+    #[test]
+    fn generated_ids_have_expected_prefixes_and_lengths() {
+        let public_id = generate_public_id();
+        let memo = generate_memo();
+        assert!(public_id.starts_with("inv_"));
+        assert!(memo.starts_with("astro_"));
+        assert_eq!(public_id.len(), 20);
+        assert_eq!(memo.len(), 18);
+    }
+
+    #[test]
+    fn session_cookie_is_http_only() {
+        let cookie = session_cookie(&sample_config(), "token".to_string());
+        assert_eq!(cookie.name(), "astropay_session");
+        assert_eq!(cookie.value(), "token");
+        assert!(cookie.http_only().unwrap_or(false));
+    }
+}
