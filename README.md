@@ -99,6 +99,6 @@ To publish the markdown backlog as real GitHub issues after re-authenticating th
 
 ```bash
 gh auth login -h github.com
-python3 scripts/publish_issue_backlog.py --repo dreamgenies/astropay --limit 25
+python3 scripts/publish_issue_backlog.py --repo dreamgenies/astropay --sync-labels --limit 25
 python3 scripts/publish_issue_backlog.py --repo dreamgenies/astropay --start AP-026 --end AP-050
 ```
