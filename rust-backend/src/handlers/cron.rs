@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 
 use crate::{
     AppState,
+    auth::authorize_cron_request,
     error::AppError,
     models::Invoice,
     stellar::{find_payment_for_invoice, invoice_is_expired},
@@ -13,7 +14,7 @@ pub async fn reconcile(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
-    authorize_cron(&state, &headers)?;
+    authorize_cron_request(&state.config.cron_secret, &headers)?;
     let mut client = state.pool.get().await?;
     let rows = client
         .query(
@@ -87,75 +88,31 @@ pub async fn settle(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
-    authorize_cron(&state, &headers)?;
+    authorize_cron_request(&state.config.cron_secret, &headers)?;
     Err(AppError::not_implemented(
         "Rust settlement execution is not implemented yet. Port the Stellar transaction signing/submission path before claiming payout parity.",
     ))
 }
 
-fn authorize_cron(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
-    let token = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "));
-    if token == Some(state.config.cron_secret.as_str()) {
-        Ok(())
-    } else {
-        Err(AppError::unauthorized("Unauthorized"))
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use axum::http::{HeaderMap, HeaderValue};
+    use axum::http::{HeaderMap, HeaderValue, header};
 
-    use super::authorize_cron;
-    use crate::{AppState, config::Config};
-
-    fn state() -> AppState {
-        AppState {
-            config: Config {
-                bind_addr: "127.0.0.1:8080".parse().unwrap(),
-                app_url: "http://localhost:3000".to_string(),
-                public_app_url: "http://localhost:3000".to_string(),
-                database_url: "postgres://postgres:postgres@localhost:5432/astropay".to_string(),
-                pgssl: "disable".to_string(),
-                session_secret: "secret".to_string(),
-                horizon_url: "https://horizon-testnet.stellar.org".to_string(),
-                network_passphrase: "Test SDF Network ; September 2015".to_string(),
-                stellar_network: "TESTNET".to_string(),
-                asset_code: "USDC".to_string(),
-                asset_issuer: "ISSUER".to_string(),
-                platform_treasury_public_key: "TREASURY".to_string(),
-                platform_treasury_secret_key: None,
-                platform_fee_bps: 100,
-                invoice_expiry_hours: 24,
-                cron_secret: "cron_secret".to_string(),
-                secure_cookies: false,
-            },
-            pool: panic_pool(),
-        }
-    }
-
-    fn panic_pool() -> deadpool_postgres::Pool {
-        panic!("pool should not be used in this test")
-    }
+    use crate::auth::authorize_cron_request;
 
     #[test]
     fn authorizes_valid_bearer_token() {
-        let state = state();
         let mut headers = HeaderMap::new();
         headers.insert(
-            "authorization",
+            header::AUTHORIZATION,
             HeaderValue::from_static("Bearer cron_secret"),
         );
-        assert!(authorize_cron(&state, &headers).is_ok());
+        assert!(authorize_cron_request("cron_secret", &headers).is_ok());
     }
 
     #[test]
     fn rejects_missing_bearer_token() {
-        let state = state();
         let headers = HeaderMap::new();
-        assert!(authorize_cron(&state, &headers).is_err());
+        assert!(authorize_cron_request("cron_secret", &headers).is_err());
     }
 }
