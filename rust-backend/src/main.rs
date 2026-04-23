@@ -53,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/login", post(handlers::auth::login))
         .route("/api/auth/logout", post(handlers::auth::logout))
         .route("/api/auth/me", get(handlers::auth::me))
+        .route("/api/auth/refresh", post(handlers::auth::refresh))
         .route(
             "/api/invoices",
             get(handlers::invoices::list_invoices).post(handlers::invoices::create_invoice),

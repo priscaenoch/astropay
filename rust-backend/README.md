@@ -4,7 +4,7 @@ This service is the beginning of the backend migration out of Next.js route hand
 
 What it currently owns:
 
-- merchant registration, login, logout, and cookie-backed sessions
+- merchant registration, login, logout, session refresh, and cookie-backed sessions
 - invoice creation, listing, detail lookup, and status lookup
 - Horizon-backed reconciliation for pending invoices
 - webhook-driven payment marking (`/api/webhooks/stellar`)
@@ -18,6 +18,34 @@ What is intentionally not faked yet:
 - merchant settlement cron
 
 Those routes return `501 Not Implemented` in the Rust service until the Stellar transaction logic is ported properly.
+
+## Session cookie security
+
+The `Secure` flag on the `astropay_session` cookie is driven by `APP_URL`:
+
+- `APP_URL` starts with `https://` → `secure_cookies = true` → `Secure` flag is set.
+- `APP_URL` starts with `http://` (local dev) → `secure_cookies = false` → `Secure` flag is absent.
+
+The cookie is always `HttpOnly` and `SameSite=Lax` regardless of environment.
+
+**Verify:** `cargo test session_cookie` runs four unit tests covering the secure flag, insecure flag, http-only invariant, and name/path stability — no running server or database required.
+
+## Session refresh (`POST /api/auth/refresh`)
+
+A valid session can be extended without re-authenticating:
+
+```
+POST /api/auth/refresh
+Cookie: astropay_session=<token>
+```
+
+Behavior:
+- If the cookie is present and the session row is unexpired, `expires_at` is extended by 30 days and a fresh JWT cookie is returned with `{ "ok": true }`.
+- If the cookie is missing or the session is expired/invalid, returns `401 AUTH_SESSION_REQUIRED`.
+- Does **not** create a new session row — only extends the existing one. Logout still invalidates the same row.
+- Does **not** accept an already-expired token (JWT `exp` validation runs first).
+
+**Verify:** call `POST /api/auth/refresh` with a valid session cookie and confirm the response sets a new cookie with a later expiry. Call it without a cookie and confirm `401`.
 
 ## Login rate limiting (`POST /api/auth/login`)
 
