@@ -1,19 +1,26 @@
-use axum::{Json, extract::State, http::HeaderMap};
+use axum::{
+    Json,
+    extract::State,
+    http::{HeaderMap, header},
+};
 use chrono::Utc;
 use serde_json::{Value, json};
+use tokio_postgres::types::Json as PgJson;
+use tracing::warn;
 
 use crate::{
     AppState,
+    auth::authorize_cron_request,
     error::AppError,
     models::Invoice,
-    stellar::{find_payment_for_invoice, invoice_is_expired},
+    stellar::{find_payment_for_invoice, invoice_is_expired, is_valid_account_public_key},
 };
 
 pub async fn reconcile(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
-    authorize_cron(&state, &headers)?;
+    authorize_cron_request(&state.config.cron_secret, &headers)?;
     let mut client = state.pool.get().await?;
     let rows = client
         .query(
@@ -53,22 +60,56 @@ pub async fn reconcile(
                         &[&invoice.id, &"payment_detected", &payment.payment],
                     )
                     .await?;
-                transaction
-                    .execute(
-                        "INSERT INTO payouts (invoice_id, merchant_id, destination_public_key, amount_cents, asset_code, asset_issuer)
-                         SELECT id, merchant_id, (SELECT settlement_public_key FROM merchants WHERE merchants.id = invoices.merchant_id),
-                                net_amount_cents, asset_code, asset_issuer
-                         FROM invoices WHERE id = $1
-                         ON CONFLICT (invoice_id) DO NOTHING",
+                let settlement_row = transaction
+                    .query_opt(
+                        "SELECT m.settlement_public_key
+                         FROM merchants m
+                         INNER JOIN invoices i ON i.merchant_id = m.id
+                         WHERE i.id = $1",
                         &[&invoice.id],
                     )
                     .await?;
+                let settlement_key: Option<String> = settlement_row.map(|row| row.get(0));
+                let settlement_key = settlement_key.unwrap_or_default();
+                let (payout_queued, payout_skip_reason) = if !is_valid_account_public_key(
+                    &settlement_key,
+                ) {
+                    transaction
+                            .execute(
+                                "INSERT INTO payment_events (invoice_id, event_type, payload) VALUES ($1, $2, $3)",
+                                &[
+                                    &invoice.id,
+                                    &"payout_skipped_invalid_destination",
+                                    &json!({ "reason": "invalid_settlement_public_key" }),
+                                ],
+                            )
+                            .await?;
+                    (false, Some("invalid_settlement_public_key"))
+                } else {
+                    let inserted = transaction
+                            .execute(
+                                "INSERT INTO payouts (invoice_id, merchant_id, destination_public_key, amount_cents, asset_code, asset_issuer)
+                                 SELECT id, merchant_id, (SELECT settlement_public_key FROM merchants WHERE merchants.id = invoices.merchant_id),
+                                        net_amount_cents, asset_code, asset_issuer
+                                 FROM invoices WHERE id = $1
+                                 ON CONFLICT (invoice_id) DO NOTHING",
+                                &[&invoice.id],
+                            )
+                            .await?;
+                    if inserted > 0 {
+                        (true, None)
+                    } else {
+                        (false, Some("payout_already_queued"))
+                    }
+                };
                 transaction.commit().await?;
                 results.push(json!({
                     "publicId": invoice.public_id,
                     "action": "paid",
                     "txHash": payment.hash,
-                    "memo": payment.memo
+                    "memo": payment.memo,
+                    "payoutQueued": payout_queued,
+                    "payoutSkipReason": payout_skip_reason
                 }));
             }
             None => {
@@ -77,85 +118,102 @@ pub async fn reconcile(
         }
     }
 
-    Ok(Json(json!({
+    let body = json!({
         "scanned": results.len(),
         "results": results
-    })))
+    });
+    if let Err(e) = client
+        .execute(
+            "INSERT INTO cron_runs (job_type, started_at, finished_at, success, metadata, error_detail)
+             VALUES ('reconcile', NOW(), NOW(), true, $1, NULL)",
+            &[&PgJson(&body)],
+        )
+        .await
+    {
+        warn!(error = %e, "cron_runs audit insert failed for reconcile");
+    }
+
+    Ok(Json(body))
 }
 
 pub async fn settle(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
-    authorize_cron(&state, &headers)?;
+    authorize_cron_request(&state.config.cron_secret, &headers)?;
     Err(AppError::not_implemented(
         "Rust settlement execution is not implemented yet. Port the Stellar transaction signing/submission path before claiming payout parity.",
     ))
 }
 
 fn authorize_cron(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
+    authorize_cron_secret(state.config.cron_secret.as_str(), headers)
+}
+
+fn authorize_cron_secret(secret: &str, headers: &HeaderMap) -> Result<(), AppError> {
+    if secret.is_empty() {
+        return Err(AppError::unauthorized("Unauthorized".to_string()));
+    }
+#[cfg(test)]
+mod tests {
+    use axum::http::{HeaderMap, HeaderValue, header};
+
+    use crate::auth::authorize_cron_request;
+    authorize_cron(&state, &headers)?;
+    let msg = "Rust settlement execution is not implemented yet. Port the Stellar transaction signing/submission path before claiming payout parity.";
+    let client = state.pool.get().await?;
+    if let Err(e) = client
+        .execute(
+            "INSERT INTO cron_runs (job_type, started_at, finished_at, success, metadata, error_detail)
+             VALUES ('settle', NOW(), NOW(), false, '{}'::jsonb, $1)",
+            &[&msg],
+        )
+        .await
+    {
+        warn!(error = %e, "cron_runs audit insert failed for settle");
+    }
+    Err(AppError::not_implemented(msg))
+}
+
+fn authorize_cron_secret(cron_secret: &str, headers: &HeaderMap) -> Result<(), AppError> {
     let token = headers
-        .get("authorization")
+        .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "));
-    if token == Some(state.config.cron_secret.as_str()) {
+    if token == Some(secret) {
+    if token == Some(cron_secret) {
         Ok(())
     } else {
-        Err(AppError::unauthorized("Unauthorized"))
+        Err(AppError::unauthorized("Unauthorized".to_string()))
     }
+}
+
+fn authorize_cron(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
+    authorize_cron_secret(state.config.cron_secret.as_str(), headers)
 }
 
 #[cfg(test)]
 mod tests {
+    use axum::http::{HeaderMap, HeaderValue, header};
     use axum::http::{HeaderMap, HeaderValue};
 
-    use super::authorize_cron;
-    use crate::{AppState, config::Config};
-
-    fn state() -> AppState {
-        AppState {
-            config: Config {
-                bind_addr: "127.0.0.1:8080".parse().unwrap(),
-                app_url: "http://localhost:3000".to_string(),
-                public_app_url: "http://localhost:3000".to_string(),
-                database_url: "postgres://postgres:postgres@localhost:5432/astropay".to_string(),
-                pgssl: "disable".to_string(),
-                session_secret: "secret".to_string(),
-                horizon_url: "https://horizon-testnet.stellar.org".to_string(),
-                network_passphrase: "Test SDF Network ; September 2015".to_string(),
-                stellar_network: "TESTNET".to_string(),
-                asset_code: "USDC".to_string(),
-                asset_issuer: "ISSUER".to_string(),
-                platform_treasury_public_key: "TREASURY".to_string(),
-                platform_treasury_secret_key: None,
-                platform_fee_bps: 100,
-                invoice_expiry_hours: 24,
-                cron_secret: "cron_secret".to_string(),
-                secure_cookies: false,
-            },
-            pool: panic_pool(),
-        }
-    }
-
-    fn panic_pool() -> deadpool_postgres::Pool {
-        panic!("pool should not be used in this test")
-    }
+    use super::authorize_cron_secret;
 
     #[test]
     fn authorizes_valid_bearer_token() {
-        let state = state();
         let mut headers = HeaderMap::new();
         headers.insert(
-            "authorization",
+            header::AUTHORIZATION,
             HeaderValue::from_static("Bearer cron_secret"),
         );
-        assert!(authorize_cron(&state, &headers).is_ok());
+        assert!(authorize_cron_request("cron_secret", &headers).is_ok());
+        assert!(authorize_cron_secret("cron_secret", &headers).is_ok());
     }
 
     #[test]
     fn rejects_missing_bearer_token() {
-        let state = state();
         let headers = HeaderMap::new();
-        assert!(authorize_cron(&state, &headers).is_err());
+        assert!(authorize_cron_request("cron_secret", &headers).is_err());
+        assert!(authorize_cron_secret("cron_secret", &headers).is_err());
     }
 }
