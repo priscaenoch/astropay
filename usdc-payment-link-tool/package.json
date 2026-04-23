@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "vitest run",
     "typecheck": "next typegen && tsc --noEmit --incremental false -p tsconfig.typecheck.json",
     "db:migrate": "node scripts/run-migrations.mjs"
   },
@@ -29,6 +30,7 @@
     "@types/react-dom": "^19.0.2",
     "eslint": "^9.17.0",
     "eslint-config-next": "^15.0.0",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.4"
   }
 }
