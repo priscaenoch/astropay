@@ -2,6 +2,7 @@ import { fail, ok } from '@/lib/http';
 import { assertSettlementConfig, env } from '@/lib/env';
 import { buildSettlementXdr, getServer } from '@/lib/stellar';
 import { getInvoiceById, markPayoutFailed, markPayoutSettled, markPayoutSubmitted, queuedPayouts } from '@/lib/data';
+import { isValidSettlementPublicKey } from '@/lib/stellarPublicKey';
 
 function authorized(request: Request) {
   const auth = request.headers.get('authorization');
@@ -16,6 +17,12 @@ export async function GET(request: Request) {
   const results: Array<Record<string, unknown>> = [];
 
   for (const payout of payouts) {
+    if (!isValidSettlementPublicKey(payout.destination_public_key)) {
+      const reason = 'Invalid destination stellar public key';
+      await markPayoutFailed(payout.id, reason);
+      results.push({ payoutId: payout.id, action: 'failed', reason });
+      continue;
+    }
     try {
       const invoice = await getInvoiceById(payout.invoice_id_ref);
       if (!invoice || invoice.status !== 'paid') continue;

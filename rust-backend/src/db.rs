@@ -4,6 +4,13 @@
 //! filter on it in SQL. Do not add JSONB indexes until a real `WHERE` / `ORDER BY` / `JOIN`
 //! pattern lands in application code; see `../usdc-payment-link-tool/migrations/003_invoice_metadata_jsonb_index_plan.sql`
 //! and the product README for the decision record and index-type cheat sheet.
+//! **Sessions** (`sessions` table) are not modeled as Rust structs here; see [`crate::auth`].
+//!
+//! Index assumptions for high churn (many logins / expiries):
+//! - Lookup uses `sessions.id` (primary key) inside `EXISTS (... AND expires_at > NOW())` — the hot path is a single-row PK fetch.
+//! - Background expiry cleanup should scan `WHERE expires_at < $1` (and optionally `ORDER BY expires_at, id` for keyset batches). Apply
+//!   migration `002_session_expiry_indexes.sql` so `(expires_at, id)` and `(merchant_id, expires_at)` exist in production; see
+//!   `usdc-payment-link-tool/migrations/` and the rust-backend README.
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use tokio_postgres::Config as PgConfig;
@@ -54,5 +61,21 @@ mod tests {
                 "003 must not create speculative metadata indexes: {t}"
             );
         }
+    fn session_expiry_migration_defines_expected_indexes() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/002_session_expiry_indexes.sql");
+        let sql = std::fs::read_to_string(path).expect("read 002_session_expiry_indexes.sql");
+        assert!(
+            sql.contains("sessions_expires_at_id_idx"),
+            "composite (expires_at, id) for ordered expiry batches"
+        );
+        assert!(
+            sql.contains("sessions_merchant_expires_at_idx"),
+            "composite (merchant_id, expires_at) for scoped cleanup"
+        );
+        assert!(
+            sql.contains("DROP INDEX IF EXISTS sessions_expires_at_idx"),
+            "replaces single-column expires_at index from 001"
+        );
     }
 }

@@ -22,8 +22,18 @@ export async function GET(request: Request) {
     }
     const payment = await findPaymentForInvoice(invoice);
     if (payment) {
-      await markInvoicePaid({ invoiceId: invoice.id, transactionHash: payment.hash, payload: payment.payment });
-      results.push({ publicId: invoice.public_id, action: 'paid', txHash: payment.hash });
+      const payout = await markInvoicePaid({
+        invoiceId: invoice.id,
+        transactionHash: payment.hash,
+        payload: payment.payment,
+      });
+      results.push({
+        publicId: invoice.public_id,
+        action: 'paid',
+        txHash: payment.hash,
+        payoutQueued: payout.payoutQueued,
+        payoutSkipReason: payout.payoutSkipReason,
+      });
     } else {
       results.push({ publicId: invoice.public_id, action: 'pending' });
     }

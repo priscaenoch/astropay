@@ -2,6 +2,8 @@
 //!
 //! **`Invoice.metadata`** is JSONB for extensibility. It is not used in SQL filters in the
 //! current codebase; indexing follows the plan in `../usdc-payment-link-tool/migrations/003_invoice_metadata_jsonb_index_plan.sql`.
+//! Merchant sessions are persisted in the `sessions` table (not represented as a struct here). Storage layout and indexes are defined under
+//! `../usdc-payment-link-tool/migrations/`; see [`crate::auth::current_merchant`] and [`crate::db`] for query assumptions.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

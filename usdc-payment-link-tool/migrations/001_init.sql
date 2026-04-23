@@ -17,6 +17,7 @@ CREATE TABLE sessions (
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Initial indexes; migration 002_session_expiry_indexes.sql refines these for expiry batching and merchant+expiry filters.
 CREATE INDEX sessions_merchant_id_idx ON sessions (merchant_id);
 CREATE INDEX sessions_expires_at_idx ON sessions (expires_at);
 
