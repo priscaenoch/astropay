@@ -16,6 +16,22 @@ use crate::{
     models::Merchant,
 };
 
+/// Validates `Authorization: Bearer <token>` for cron and webhook routes.
+pub fn authorize_cron_request(cron_secret: &str, headers: &HeaderMap) -> Result<(), AppError> {
+    if cron_secret.is_empty() {
+        return Err(AppError::unauthorized_code(AuthErrorCode::CronSecretMismatch));
+    }
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    if token == Some(cron_secret) {
+        Ok(())
+    } else {
+        Err(AppError::unauthorized_code(AuthErrorCode::CronSecretMismatch))
+    }
+}
+
 pub const SESSION_COOKIE: &str = "astropay_session";
 
 /// Same rule as registration SQL: neither incoming key may appear in any existing
@@ -185,22 +201,6 @@ where
     Ok(row.map(|row| Merchant::from_row(&row)))
 }
 
-/// Validates `Authorization: Bearer <token>` against the configured cron/webhook secret.
-pub fn authorize_cron_request(cron_secret: &str, headers: &HeaderMap) -> Result<(), AppError> {
-    if cron_secret.is_empty() {
-        return Err(AppError::unauthorized_code(AuthErrorCode::CronSecretMismatch));
-    }
-    let token = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "));
-    if token == Some(cron_secret) {
-        Ok(())
-    } else {
-        Err(AppError::unauthorized_code(AuthErrorCode::CronSecretMismatch))
-    }
-}
-
 fn session_cookie(config: &Config, token: String) -> Cookie<'static> {
     Cookie::build((SESSION_COOKIE, token))
         .path("/")
@@ -353,6 +353,33 @@ mod tests {
     }
 
     // --- wallet key conflict ---
+
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer x"),
+        );
+        assert!(authorize_cron_request("", &headers).is_err());
+    }
+
+    #[test]
+    fn authorize_cron_rejects_wrong_bearer() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer wrong"),
+        );
+        assert!(authorize_cron_request("cron_secret", &headers).is_err());
+    }
+
+    #[test]
+    fn authorize_cron_rejects_when_secret_not_configured() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer anything"),
+        );
+        assert!(authorize_cron_request("", &headers).is_err());
+    }
 
     #[test]
     fn wallet_conflict_detects_stellar_reuse() {
