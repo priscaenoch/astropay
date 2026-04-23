@@ -18,6 +18,18 @@ use crate::{
 
 pub const SESSION_COOKIE: &str = "astropay_session";
 
+/// Same rule as registration SQL: neither incoming key may appear in any existing
+/// merchant row as either `stellar_public_key` or `settlement_public_key`.
+pub fn wallet_keys_conflict_with_existing(
+    existing: &[(&str, &str)],
+    stellar: &str,
+    settlement: &str,
+) -> bool {
+    existing.iter().any(|(es, et)| {
+        *es == stellar || *es == settlement || *et == stellar || *et == settlement
+    })
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Claims {
     sid: Uuid,
@@ -159,10 +171,16 @@ mod tests {
     use axum::http::{HeaderMap, HeaderValue, header};
 
     use super::{
+        generate_memo, generate_public_id, hash_password, session_cookie, verify_password,
+        wallet_keys_conflict_with_existing,
         authorize_cron_request, generate_memo, generate_public_id, hash_password, session_cookie,
         verify_password,
     };
     use crate::config::Config;
+
+    fn g_key(fill: char) -> String {
+        format!("G{}", std::iter::repeat(fill).take(55).collect::<String>())
+    }
 
     fn sample_config() -> Config {
         Config {
@@ -212,6 +230,38 @@ mod tests {
     }
 
     #[test]
+    fn wallet_conflict_detects_stellar_reuse() {
+        let s1 = g_key('1');
+        let t1 = g_key('2');
+        let s2 = g_key('3');
+        let t2 = g_key('4');
+        assert!(wallet_keys_conflict_with_existing(
+            &[(s1.as_str(), t1.as_str())],
+            s1.as_str(),
+            t2.as_str()
+        ));
+        assert!(!wallet_keys_conflict_with_existing(
+            &[(s1.as_str(), t1.as_str())],
+            s2.as_str(),
+            t2.as_str()
+        ));
+    }
+
+    #[test]
+    fn wallet_conflict_detects_cross_column_reuse() {
+        let s1 = g_key('a');
+        let t1 = g_key('b');
+        let s2 = g_key('c');
+        assert!(wallet_keys_conflict_with_existing(
+            &[(s1.as_str(), t1.as_str())],
+            s2.as_str(),
+            s1.as_str(),
+        ));
+        assert!(wallet_keys_conflict_with_existing(
+            &[(s1.as_str(), t1.as_str())],
+            t1.as_str(),
+            s2.as_str(),
+        ));
     fn authorize_cron_rejects_wrong_bearer() {
         let mut headers = HeaderMap::new();
         headers.insert(

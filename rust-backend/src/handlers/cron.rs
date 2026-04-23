@@ -1,4 +1,8 @@
-use axum::{Json, extract::State, http::HeaderMap};
+use axum::{
+    Json,
+    extract::State,
+    http::{HeaderMap, header},
+};
 use chrono::Utc;
 use serde_json::{Value, json};
 use tokio_postgres::types::Json as PgJson;
@@ -142,6 +146,14 @@ pub async fn settle(
     ))
 }
 
+fn authorize_cron(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
+    authorize_cron_secret(state.config.cron_secret.as_str(), headers)
+}
+
+fn authorize_cron_secret(secret: &str, headers: &HeaderMap) -> Result<(), AppError> {
+    if secret.is_empty() {
+        return Err(AppError::unauthorized("Unauthorized".to_string()));
+    }
 #[cfg(test)]
 mod tests {
     use axum::http::{HeaderMap, HeaderValue, header};
@@ -165,13 +177,14 @@ mod tests {
 
 fn authorize_cron_secret(cron_secret: &str, headers: &HeaderMap) -> Result<(), AppError> {
     let token = headers
-        .get("authorization")
+        .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "));
+    if token == Some(secret) {
     if token == Some(cron_secret) {
         Ok(())
     } else {
-        Err(AppError::unauthorized("Unauthorized"))
+        Err(AppError::unauthorized("Unauthorized".to_string()))
     }
 }
 
@@ -181,6 +194,7 @@ fn authorize_cron(state: &AppState, headers: &HeaderMap) -> Result<(), AppError>
 
 #[cfg(test)]
 mod tests {
+    use axum::http::{HeaderMap, HeaderValue, header};
     use axum::http::{HeaderMap, HeaderValue};
 
     use super::authorize_cron_secret;
