@@ -23,7 +23,7 @@ export default async function PayPage({ params }: { params: Promise<{ publicId: 
       <div className="stack">
         <div className="card stack">
           <div className="badge">QR checkout</div>
-          {invoice.qr_data_url ? <img src={invoice.qr_data_url} alt="Invoice QR code" width={280} height={280} /> : null}
+          {invoice.qr_data_url ? <img src={invoice.qr_data_url} alt="Invoice QR code" className="qr-img" /> : null}
         </div>
         <PayWithFreighter invoiceId={invoice.id} status={invoice.status} />
       </div>
