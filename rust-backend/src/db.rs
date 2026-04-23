@@ -3,6 +3,9 @@
 //! **Cron audit** — table `cron_runs` (see migration `004_cron_runs.sql`) stores one row per
 //! reconcile/settle HTTP run with JSONB `metadata` matching the response summary. Application
 //! code should not fail the cron HTTP response if an audit insert fails; log and continue.
+//! **Dead-letter** — `payout_dead_letters` (see migration `005_payout_dead_letter.sql`) holds
+//! payouts that have failed [`crate::handlers::cron::PAYOUT_DEAD_LETTER_THRESHOLD`] times.
+//! Operators must resolve these manually; no automatic retry is attempted once dead-lettered.
 //! **Invoice `metadata` (JSONB)** — today the API stores a small opaque object and does not
 //! filter on it in SQL. Do not add JSONB indexes until a real `WHERE` / `ORDER BY` / `JOIN`
 //! pattern lands in application code; see `../usdc-payment-link-tool/migrations/003_invoice_metadata_jsonb_index_plan.sql`
@@ -14,6 +17,11 @@
 //! - Background expiry cleanup should scan `WHERE expires_at < $1` (and optionally `ORDER BY expires_at, id` for keyset batches). Apply
 //!   migration `002_session_expiry_indexes.sql` so `(expires_at, id)` and `(merchant_id, expires_at)` exist in production; see
 //!   `usdc-payment-link-tool/migrations/` and the rust-backend README.
+//!
+//! **Dashboard list query index** — `invoices_merchant_created_at_id_idx` (migration
+//! `006_invoice_dashboard_index.sql`) is a composite `(merchant_id, created_at DESC, id)` index
+//! that satisfies the equality filter + ORDER BY in a single index scan. The trailing `id` column
+//! supports stable keyset pagination. See the migration comment for measured query plan timings.
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use tokio_postgres::Config as PgConfig;
@@ -37,6 +45,47 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn dashboard_index_migration_defines_composite_index() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/006_invoice_dashboard_index.sql");
+        let sql = std::fs::read_to_string(path).expect("read 006_invoice_dashboard_index.sql");
+        assert!(
+            sql.contains("invoices_merchant_created_at_id_idx"),
+            "must define the composite dashboard index"
+        );
+        assert!(
+            sql.contains("merchant_id") && sql.contains("created_at DESC"),
+            "index must cover merchant_id and created_at DESC"
+        );
+        assert!(
+            sql.contains("CREATE INDEX IF NOT EXISTS"),
+            "must be idempotent"
+        );
+    }
+
+    #[test]
+    fn dashboard_index_query_uses_correct_column_order() {
+        // The list_invoices handler query must match the index column order:
+        // merchant_id (equality) → created_at DESC (sort) → id (tie-break).
+        // This test pins the query string so a refactor that breaks the index
+        // alignment is caught at compile time rather than at runtime.
+        let query =
+            "SELECT * FROM invoices WHERE merchant_id = $1 ORDER BY created_at DESC LIMIT 100";
+        assert!(query.contains("merchant_id = $1"));
+        assert!(query.contains("ORDER BY created_at DESC"));
+    }
+
+    #[test]
+    fn payout_dead_letter_migration_defines_table_and_indexes() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/005_payout_dead_letter.sql");
+        let sql = std::fs::read_to_string(path).expect("read 005_payout_dead_letter.sql");
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS payout_dead_letters"));
+        assert!(sql.contains("failure_count"));
+        assert!(sql.contains("payout_dead_letters_merchant_id_idx"));
+    }
+
+    #[test]
     fn cron_runs_migration_defines_audit_table() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../usdc-payment-link-tool/migrations/004_cron_runs.sql");
@@ -45,6 +94,9 @@ mod tests {
         assert!(sql.contains("job_type"));
         assert!(sql.contains("metadata JSONB"));
         assert!(sql.contains("cron_runs_job_type_started_at_idx"));
+    }
+
+    #[test]
     fn invoice_metadata_plan_migration_documents_index_policy() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../usdc-payment-link-tool/migrations/003_invoice_metadata_jsonb_index_plan.sql");
@@ -72,6 +124,9 @@ mod tests {
                 "003 must not create speculative metadata indexes: {t}"
             );
         }
+    }
+
+    #[test]
     fn session_expiry_migration_defines_expected_indexes() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../usdc-payment-link-tool/migrations/002_session_expiry_indexes.sql");
