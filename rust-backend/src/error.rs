@@ -37,10 +37,7 @@ pub struct UnauthorizedError {
 
 impl UnauthorizedError {
     pub fn new(code: AuthErrorCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
+        Self { code, message: message.into() }
     }
 
     pub fn from_code(code: AuthErrorCode) -> Self {
@@ -64,12 +61,12 @@ pub enum AppError {
     #[error("{0}")]
     BadRequest(String),
     #[error("{0}")]
-    Unauthorized(String),
+    Unauthorized(UnauthorizedError),
     #[error("Too many login attempts")]
+    RateLimited { retry_after_seconds: u64 },
     RateLimited {
         retry_after_seconds: u64,
     },
-    Unauthorized(UnauthorizedError),
     #[error("{0}")]
     NotFound(String),
     #[error("{0}")]
@@ -103,7 +100,6 @@ impl AppError {
         Self::BadRequest(message.into())
     }
 
-    /// Prefer [`Self::unauthorized_code`] unless you need a custom `message` for the same `code`.
     #[allow(dead_code)]
     pub fn unauthorized(err: UnauthorizedError) -> Self {
         Self::Unauthorized(err)
@@ -114,9 +110,7 @@ impl AppError {
     }
 
     pub fn rate_limited(retry_after_seconds: u64) -> Self {
-        Self::RateLimited {
-            retry_after_seconds,
-        }
+        Self::RateLimited { retry_after_seconds }
     }
 
     pub fn not_found(message: impl Into<String>) -> Self {
@@ -135,9 +129,7 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
-            Self::RateLimited {
-                retry_after_seconds,
-            } => {
+            Self::RateLimited { retry_after_seconds } => {
                 let body = RateLimitedBody {
                     error: RateLimitedInner {
                         code: "AUTH_RATE_LIMITED",
@@ -154,43 +146,32 @@ impl IntoResponse for AppError {
             }
             Self::BadRequest(message) => (
                 StatusCode::BAD_REQUEST,
-                Json(ErrorBody { error: message }),
+                Json(LegacyErrorBody { error: message }),
             )
                 .into_response(),
-            Self::Unauthorized(message) => (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorBody { error: message }),
             Self::Unauthorized(err) => (
                 StatusCode::UNAUTHORIZED,
                 Json(UnauthorizedBody { error: err }),
             )
                 .into_response(),
-            Self::BadRequest(message) => (
-                StatusCode::BAD_REQUEST,
-                Json(LegacyErrorBody { error: message }),
-            )
-                .into_response(),
             Self::NotFound(message) => (
                 StatusCode::NOT_FOUND,
-                Json(ErrorBody { error: message }),
                 Json(LegacyErrorBody { error: message }),
             )
                 .into_response(),
             Self::Conflict(message) => (
                 StatusCode::CONFLICT,
-                Json(ErrorBody { error: message }),
                 Json(LegacyErrorBody { error: message }),
             )
                 .into_response(),
             Self::NotImplemented(message) => (
                 StatusCode::NOT_IMPLEMENTED,
-                Json(ErrorBody { error: message }),
                 Json(LegacyErrorBody { error: message }),
             )
                 .into_response(),
             Self::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorBody {
+                Json(LegacyErrorBody { error: "Unexpected error".to_string() }),
                 Json(LegacyErrorBody {
                     error: "Unexpected error".to_string(),
                 }),
@@ -220,7 +201,7 @@ impl From<jsonwebtoken::errors::Error> for AppError {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthErrorCode, UnauthorizedError};
+    use super::{AuthErrorCode, RateLimitedBody, RateLimitedInner, UnauthorizedError};
 
     #[test]
     fn unauthorized_body_serializes_nested_error_with_code() {
@@ -245,11 +226,6 @@ mod tests {
         let v = serde_json::to_value(&err).unwrap();
         assert_eq!(v["code"], "AUTH_CRON_SECRET_MISMATCH");
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{RateLimitedBody, RateLimitedInner};
 
     #[test]
     fn rate_limited_json_uses_auth_rate_limited_code() {

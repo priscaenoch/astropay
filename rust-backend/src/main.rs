@@ -53,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/login", post(handlers::auth::login))
         .route("/api/auth/logout", post(handlers::auth::logout))
         .route("/api/auth/me", get(handlers::auth::me))
+        .route("/api/auth/refresh", post(handlers::auth::refresh))
         .route(
             "/api/invoices",
             get(handlers::invoices::list_invoices).post(handlers::invoices::create_invoice),
@@ -68,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/cron/reconcile", get(handlers::cron::reconcile))
         .route("/api/cron/settle", get(handlers::cron::settle))
-        .route("/api/cron/reconcile/replay", post(handlers::cron::replay_invoice))
+        .route("/api/cron/purge-sessions", get(handlers::cron::purge_sessions))
         .route(
             "/api/webhooks/stellar",
             post(handlers::misc::stellar_webhook),
