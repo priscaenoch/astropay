@@ -204,6 +204,7 @@ mod tests {
             settlement_hash: None,
             checkout_url: None,
             qr_data_url: None,
+            last_checkout_attempt_at: None,
             metadata: json!({}),
             created_at: Utc::now(),
             updated_at: Utc::now(),

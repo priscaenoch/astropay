@@ -145,3 +145,44 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod checkout_attempt_tests {
+    use std::path::Path;
+
+    #[test]
+    fn last_checkout_attempt_migration_adds_nullable_column() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/005_invoice_last_checkout_attempt_at.sql");
+        let sql = std::fs::read_to_string(path)
+            .expect("read 005_invoice_last_checkout_attempt_at.sql");
+        assert!(
+            sql.contains("ALTER TABLE invoices"),
+            "migration must alter the invoices table"
+        );
+        assert!(
+            sql.contains("last_checkout_attempt_at"),
+            "migration must add last_checkout_attempt_at column"
+        );
+        assert!(
+            sql.contains("TIMESTAMPTZ"),
+            "column must be a timestamp with time zone"
+        );
+        // Column must be nullable — no NOT NULL constraint allowed.
+        assert!(
+            !sql.contains("NOT NULL"),
+            "last_checkout_attempt_at must be nullable (no NOT NULL)"
+        );
+        // No speculative index — add one only when a real query pattern exists.
+        for line in sql.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with("--") {
+                continue;
+            }
+            assert!(
+                !t.to_uppercase().starts_with("CREATE INDEX"),
+                "005 must not create a speculative index: {t}"
+            );
+        }
+    }
+}
